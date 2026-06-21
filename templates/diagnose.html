@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Nouvelle demande de support</h2>
+<p>Décrivez votre problème. Notre IA va tenter un diagnostic immédiat.</p>
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+<form method="post">{% csrf_token %}
+    <textarea name="problem" class="form-control" rows="5" placeholder="Ex: Mon écran est noir après le démarrage..."></textarea><br>
+    <button class="btn btn-primary">Lancer le diagnostic IA</button>
+</form>
+{% endblock %}

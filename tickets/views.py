@@ -1,107 +1,74 @@
-from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from django.utils import timezone
-from .models import Ticket, TicketMessage
-from .serializers import TicketSerializer, TicketMessageSerializer
-from chatbot.services import AIChatbot
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.decorators import login_required
+from django.contrib.admin.views.decorators import staff_member_required
+from django.db import transaction
+from .models import Ticket
+from .ai import diagnose
+from django.contrib.auth import get_user_model
 
-class TicketViewSet(viewsets.ModelViewSet):
-    serializer_class = TicketSerializer
-    permission_classes = [permissions.IsAuthenticated]
+User = get_user_model()
+
+@login_required
+def diagnose_view(request):
+    if request.method == 'POST':
+        problem = request.POST.get('problem','').strip()
+        if not problem:
+            return render(request, 'diagnose.html', {'error':'Décrivez votre problème.'})
+        
+        # Simule "l'IA de première ligne"
+        ai_result = diagnose(problem)
+        request.session['diagnosis'] = ai_result
+        request.session['problem_text'] = problem
+        return redirect('diagnose_result')
+    return render(request, 'diagnose.html')
+
+@login_required
+def diagnose_result(request):
+    d = request.session.get('diagnosis')
+    if not d: return redirect('diagnose')
+    return render(request, 'diagnose_result.html', {'ai': d})
+
+@login_required
+def ticket_create(request):
+    """Appelé quand l'utilisateur clique sur 'Non, contacter un technicien'"""
+    d = request.session.get('diagnosis')
+    p = request.session.get('problem_text')
+    if not d or not p: return redirect('diagnose')
     
-    def get_queryset(self):
-        user = self.request.user
-        if user.user_type in ['TECH', 'ADMIN']:
-            return Ticket.objects.all()
-        return Ticket.objects.filter(created_by=user)
-    
-    def perform_create(self, serializer):
-        ticket = serializer.save(created_by=self.request.user)
-        
-        # Analyse IA du ticket
-        ai = AIChatbot()
-        category = ai.categorize_ticket(ticket.description)
-        priority = ai.determine_priority(ticket.description)
-        
-        ticket.category = category
-        ticket.priority = priority
-        ticket.status = 'IA_ANALYZING'
-        ticket.save()
-        
-        # Lancer l'analyse asynchrone (à implémenter avec Celery si nécessaire)
-        self._analyze_ticket(ticket)
-    
-    def _analyze_ticket(self, ticket):
-        """Analyse le ticket avec l'IA et crée un message de diagnostic"""
-        ai = AIChatbot()
-        diagnosis = ai.diagnose_issue(ticket.description)
-        
-        # Créer un message IA avec le diagnostic
-        TicketMessage.objects.create(
-            ticket=ticket,
-            content=f"🤖 Diagnostic IA : {diagnosis['diagnostic']}\n\n"
-                   f"Priorité détectée : {ticket.get_priority_display()}\n"
-                   f"Catégorie : {ticket.get_category_display()}",
-            is_ai_message=True
+    with transaction.atomic():
+        t = Ticket.objects.create(
+            user=request.user,
+            title=(p[:60] + "...") if len(p)>60 else p,
+            description=p,
+            category=d.get('category','other'),
+            priority=d.get('priority','medium'),
+            ai_first_response=d.get('response','')
         )
-        
-        # Mettre à jour le statut
-        if diagnosis['can_resolve']:
-            ticket.status = 'OPEN'
-        else:
-            ticket.status = 'OPEN'
-            # Ajouter message pour technicien
-            TicketMessage.objects.create(
-                ticket=ticket,
-                content="L'IA n'a pas pu résoudre automatiquement ce problème. "
-                       "Un technicien va prendre en charge votre ticket.",
-                is_ai_message=True
-            )
-        
-        ticket.save()
-    
-    @action(detail=True, methods=['post'])
-    def add_message(self, request, pk=None):
-        ticket = self.get_object()
-        serializer = TicketMessageSerializer(data=request.data)
-        
-        if serializer.is_valid():
-            message = serializer.save(
-                ticket=ticket,
-                sender=request.user,
-                is_ai_message=False
-            )
-            
-            # Si c'est un technicien qui répond, analyser avec l'IA pour suggérer
-            if request.user.user_type in ['TECH', 'ADMIN']:
-                ai = AIChatbot()
-                suggestion = ai.diagnose_issue(request.data['content'], 
-                                               context=ticket.description)
-                if suggestion['suggested_solution']:
-                    TicketMessage.objects.create(
-                        ticket=ticket,
-                        content=f"💡 Suggestion IA : {suggestion['suggested_solution']}",
-                        is_ai_message=True
-                    )
-            
-            return Response(TicketMessageSerializer(message).data, 
-                          status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    @action(detail=True, methods=['post'])
-    def resolve(self, request, pk=None):
-        ticket = self.get_object()
-        
-        if request.user.user_type not in ['TECH', 'ADMIN']:
-            return Response(
-                {'error': 'Seuls les techniciens peuvent résoudre un ticket'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        ticket.status = 'RESOLVED'
-        ticket.resolved_at = timezone.now()
-        ticket.save()
-        
-        return Response({'status': 'Ticket résolu avec succès'})
+    # Cleanup session
+    request.session.pop('diagnosis',None)
+    request.session.pop('problem_text',None)
+    return redirect('ticket_detail', ticket_id=t.id)
+
+@login_required
+def ticket_detail(request, ticket_id):
+    ticket = get_object_or_404(Ticket, id=ticket_id, user=request.user) if not request.user.is_technician else get_object_or_404(Ticket, id=ticket_id)
+    return render(request, 'ticket_detail.html', {'ticket': ticket})
+
+@login_required
+def dashboard(request):
+    tickets = Ticket.objects.filter(user=request.user)
+    return render(request, 'dashboard.html', {'tickets': tickets})
+
+@staff_member_required  # ou décorateur perso vérifiant is_technician
+def tech_dashboard(request):
+    # Technicien voit les tickets New/Open non assignés ou assignés à lui
+    tickets = Ticket.objects.filter(status__in=['new','open']).order_by('-priority','-created_at')
+    return render(request, 'tech/dashboard.html', {'tickets': tickets})
+
+@staff_member_required
+def take_ticket(request, ticket_id):
+    ticket = get_object_or_404(Ticket, id=ticket_id)
+    ticket.technician = request.user
+    ticket.status = 'open'
+    ticket.save()
+    return redirect('tech_dashboard')

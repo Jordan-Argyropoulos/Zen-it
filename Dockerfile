@@ -1,25 +1,21 @@
 FROM python:3.11-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Installer les dépendances système
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y gcc libpq-dev && rm -rf /var/lib/apt/lists/*
 
-# Copier les requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copier le projet
 COPY . .
 
-# Collecter les fichiers statiques
+# Whitenoise servira les statics en prod
 RUN python manage.py collectstatic --noinput
 
-# Exposer le port
 EXPOSE 8000
 
-# Commande de démarrage
-CMD ["gunicorn", "zenit_helpdesk.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
-
+# Migrate au démarrage (acceptable pour un MVP, pas pour scale massif)
+CMD ["sh","-c","python manage.py migrate && gunicorn --bind 0.0.0.0:8000 --workers 2 core.wsgi:application"]
