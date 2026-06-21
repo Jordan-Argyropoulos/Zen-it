@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card">
+  <div class="card-header bg-info text-white">Diagnostic IA - Niveau 1</div>
+  <div class="card-body">
+    <p><strong>Conseil proposé :</strong></p>
+    <p>{{ ai.response }}</p>
+    <hr>
+    {% if ai.needs_technician %}
+      <a href="{% url 'ticket_escalate' %}" class="btn btn-danger">Ce diagnostic ne m'aide pas (Créer un ticket)</a>
+    {% else %}
+      <a href="{% url 'dashboard' %}" class="btn btn-success">Problème résolu ! Retour au tableau de bord</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
