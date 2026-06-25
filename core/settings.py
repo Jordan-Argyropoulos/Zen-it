@@ -32,7 +32,7 @@ if os.getenv('WEBSITE_HOSTNAME'):
 
 
 # Application definition
-
+AUTH_USER_MODEL = 'accounts.User'
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -85,11 +85,15 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-# Override par la variable d'env Azure
-if os.getenv('DATABASE_URL'):
-    DATABASES['default'] = dj_database_url.config(conn_max_age=600, ssl_require=True)
 
-AUTH_USER_MODEL = 'accounts.User'
+database_url = os.getenv('DATABASE_URL')
+if database_url:
+    # Connexion PostgreSQL (Azure)
+    DATABASES['default'] = dj_database_url.config(
+        default=database_url,
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
